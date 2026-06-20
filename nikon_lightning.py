@@ -56,9 +56,14 @@ BURST      = 1      # shots per detection. Try 2-3 to catch later strokes.
 COOLDOWN_S = 1.0    # minimum seconds between detections
 
 # --- cull mode only ---------------------------------------------------------
-CULL_KEEP_SCORE = 8.0    # keep an exposure if it differs this much from the last
-CULL_DELETE     = False  # False = move rejects to a "discard" folder (safe).
-                         # True  = delete rejects outright.
+# Cull judges each exposure on its OWN brightness (a lightning bolt is a bright
+# cluster against a dark sky); it does NOT compare frames to each other, so it
+# can't be fooled by the dark frame right after a strike.
+CULL_BRIGHT_LEVEL = 200    # 0-255: a pixel brighter than this counts as "lit"
+CULL_KEEP_PCT     = 0.01   # keep the frame if at least this % of it is "lit".
+                           # lower = keep more (safer); raise to cut false keeps.
+CULL_DELETE       = False  # False = move rejects to a "discard" folder (safe).
+                           # True  = delete rejects outright.
 
 # ----------------------------------------------------------------------------
 
@@ -133,6 +138,17 @@ def score(frame, prev):
     hot_ratio = np.sum(diff > DIFF_PIXEL_THRESHOLD) / diff.size
     peak = float(np.percentile(diff, 99))
     return hot_ratio * 100 + peak * 0.5
+
+
+def lightning_score(frame):
+    """Lightning content of a SINGLE exposure: how much of the frame is lit by a
+    bright bolt against a dark sky. Judged on its own - no other frame needed -
+    so the dark frame right after a strike scores ~0 and isn't kept by mistake."""
+    if frame is None:
+        return 0.0
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    lit_ratio = np.count_nonzero(gray > CULL_BRIGHT_LEVEL) / gray.size
+    return lit_ratio * 100.0  # percent of the frame that is "lit"
 
 
 def startup_checks():
@@ -235,7 +251,6 @@ def run_cull():
 
     log("Continuous capture - keeping only frames with lightning.")
     log("Make sure the camera is shooting JPEG (the script must read each frame).")
-    prev_small = None
 
     while True:
         t0 = time.time()
@@ -250,23 +265,23 @@ def run_cull():
             log(f"(can't read {os.path.basename(f)} - shoot JPEG for cull mode)")
             continue
 
-        small = cv2.resize(img, (640, 426))
-        s = score(small, prev_small)
-        prev_small = small
-
+        s = lightning_score(img)        # judged on this frame alone
         name = os.path.basename(f)
-        if s > CULL_KEEP_SCORE:
+
+        if s >= CULL_KEEP_PCT:
             try:
                 os.replace(f, os.path.join(keep_dir, name))
-                log(f"** KEEP {name}  score={s:.1f}")
+                log(f"** KEEP {name}  lit={s:.3f}%")
             except OSError as e:
                 log(f"keep failed: {e}")
         elif CULL_DELETE:
+            log(f"discard {name}  lit={s:.3f}%")
             try:
                 os.remove(f)
             except OSError:
                 pass
         else:
+            log(f"discard {name}  lit={s:.3f}%")
             try:
                 os.replace(f, os.path.join(discard_dir, name))
             except OSError:
