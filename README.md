@@ -2,8 +2,11 @@
 
 Drive a camera from a laptop and fire the shutter when lightning is detected.
 
-Two ways to run it:
+Three ways to run it:
 
+- **Hardware trigger (fastest)** — a photo sensor + Arduino short the camera's
+  MC-DC2 shutter line directly, reacting in *microseconds* with no PC/app
+  latency. See [`hardware_trigger/`](hardware_trigger/README.md).
 - **Nikon DSLR on a Windows laptop** — `nikon_lightning.py` (this guide). Built and
   tested against a **Nikon D3300** over USB using digiCamControl.
 - **Raspberry Pi + USB webcam** — the original project (`client.py` + `server.py`).
