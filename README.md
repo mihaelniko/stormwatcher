@@ -78,10 +78,6 @@ Photos land in your save folder. Press **Ctrl+C** to stop.
   → lower it. Watch the `score=...` lines it prints to pick a good value.
 - **Multi-stroke flashes** → set `BURST = 2` or `3`.
 - Keep `AUTOFOCUS = False` and pre-focus to infinity for the fastest release.
-- In `cull` mode, each exposure is judged on its **own** brightness (a bolt is a
-  bright cluster against a dark sky), not against other frames. It prints a
-  `lit=…%` for every frame — keep too many → raise `CULL_KEEP_PCT`; missing dim
-  or distant strikes → lower `CULL_KEEP_PCT` and/or `CULL_BRIGHT_LEVEL`.
 - In `cull` mode, rejected frames are moved to a `discard` subfolder by default
   (`CULL_DELETE = False`); set it to `True` to delete them instead.
 
