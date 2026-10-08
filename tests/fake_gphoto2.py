@@ -54,6 +54,9 @@ class Device:
         self.busy_until = 0.0
         self.busy_responses = 0    # force N busy answers
         self.exposure = 0.05
+        self.lag = 0.0             # release -> shutter open
+        self.write_delay = 0.01    # shutter closed -> picture on the card
+        self.windows = []          # true (open, close) of every exposure taken
         self.events = []           # (deliver_at, folder, name)
         self.files = {}            # (folder, name) -> bytes
         self.counter = 0
@@ -66,14 +69,18 @@ class Device:
     def shoot(self):
         self.counter += 1
         now = time.monotonic()
-        self.busy_until = now + self.exposure
+        t_open = now + self.lag
+        t_close = t_open + self.exposure
+        self.windows.append((t_open, t_close))
+        self.busy_until = t_close + self.write_delay
         names = [f"DSC_{self.counter:04d}.JPG"]
         if self.raw_plus_jpeg:
             names.insert(0, f"DSC_{self.counter:04d}.NEF")
-        for n in names:
+        for i, n in enumerate(names):
             data = (n.encode() * 250_000)[: 2_500_000]  # ~2.5 MB: three 1 MB chunks
             self.files[("/store_00010001/DCIM/100D3300", n)] = data
-            self.events.append((now + self.exposure + 0.01, "/store_00010001/DCIM/100D3300", n))
+            self.events.append((t_close + self.write_delay + 0.05 * i,
+                                "/store_00010001/DCIM/100D3300", n))
 
 
 DEVICE = Device()

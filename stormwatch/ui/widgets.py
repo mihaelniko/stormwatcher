@@ -138,6 +138,7 @@ class SignalGraph(QWidget):
         self.points: deque = deque(maxlen=4000)
         self.triggers: deque = deque(maxlen=200)
         self.flashes: deque = deque(maxlen=400)
+        self.exposures: dict = {}   # night mode: id -> [t_open, t_end, state]
         self.armed = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.update)
@@ -151,6 +152,18 @@ class SignalGraph(QWidget):
 
     def add_flash(self, t: float) -> None:
         self.flashes.append(t)
+
+    def add_exposure(self, eid: int, t_open: float, t_close: float) -> None:
+        self.exposures[eid] = [t_open, t_close, "open"]
+        for old in sorted(self.exposures)[:-60]:
+            del self.exposures[old]
+
+    def end_exposure(self, eid: int, t_end: float | None, lightning: bool) -> None:
+        e = self.exposures.get(eid)
+        if e is not None:
+            if t_end:
+                e[1] = t_end
+            e[2] = "lightning" if lightning else "plain"
 
     def clear(self) -> None:
         self.points.clear()
@@ -197,6 +210,20 @@ class SignalGraph(QWidget):
         for s in (0, 4, 8, 12):
             p.drawText(QRectF(x_of(now - s) - 20, bottom + 2, 40, 14), Qt.AlignmentFlag.AlignCenter,
                        "now" if s == 0 else f"-{s}s")
+
+        # Night exposures: where the shutter was open; amber = caught lightning.
+        band_colors = {"open": QColor(61, 174, 233, 45), "plain": QColor(139, 141, 152, 35),
+                       "lightning": QColor(255, 178, 36, 80)}
+        for eid, (t_open, t_end, state) in self.exposures.items():
+            end = min(t_end, now) if state == "open" else t_end
+            if end < t0 or t_open > now:
+                continue
+            x0, x1 = max(left, x_of(t_open)), min(right, x_of(end))
+            p.fillRect(QRectF(x0, top, max(1.0, x1 - x0), h), band_colors[state])
+            if x1 - x0 > 22:
+                p.setPen(label)
+                p.drawText(QRectF(x0 + 3, top + 1, x1 - x0 - 4, 14),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"#{eid}")
 
         thr = QPen(RED if self.armed else AMBER, 1.5, Qt.PenStyle.DashLine)
         p.setPen(thr)

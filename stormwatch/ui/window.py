@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         self._last_info = 0.0
         self._reactions: list = []
         self._clips = 0
+        self._night_hits = 0
         self._seen_errors: set = set()
         self._bind: dict = {}
         self._built = False
@@ -314,6 +315,9 @@ class MainWindow(QMainWindow):
         self.night_exp.setDecimals(2)
         self.night_exp.setSpecialValueText("from camera")
         self.night_exp.setSuffix(" s")
+        self.night_exp.setToolTip("How long each exposure lasts. 'from camera' reads the D3300's "
+                                  "shutter speed over USB; set it by hand when only the remote "
+                                  "cable is connected.")
         self.night_gap = self._b("night_gap_s", QDoubleSpinBox(), "dspin")
         self.night_gap.setRange(0.1, 10)
         self.night_gap.setSuffix(" s")
@@ -593,6 +597,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ actions ---
     def toggle_arm(self) -> None:
+        if not self._armed and self.apply_btn.isEnabled():
+            self.apply()  # arm what is on screen, not the last applied settings
         self.client.send({"cmd": "disarm" if self._armed else "arm"})
         self.arm_btn.set_armed(self._armed)  # the engine's state event decides
 
@@ -669,6 +675,8 @@ class MainWindow(QMainWindow):
             handler(ev)
 
     def _ev_state(self, ev) -> None:
+        if ev["armed"] and not self._armed:
+            self._night_hits = 0
         self._armed = ev["armed"]
         self.arm_btn.set_armed(self._armed)
         self.preview.set_armed(self._armed)
@@ -765,11 +773,35 @@ class MainWindow(QMainWindow):
             self.gallery.add_image(ev["trigger_frame"], f"detector #{ev['trigger_id']}",
                                    f"Detector frames for trigger #{ev['trigger_id']}\n{ev['dir']}", kind="clip")
 
+    def _ev_arm_failed(self, ev) -> None:
+        self.arm_btn.set_armed(False)
+        box = QMessageBox(QMessageBox.Icon.Warning, "Cannot arm", ev["reason"],
+                          QMessageBox.StandardButton.Ok, self)
+        box.setModal(False)
+        box.open()  # non-blocking: engine events keep flowing
+        self._arm_box = box
+
+    def _ev_night_exposure(self, ev) -> None:
+        eid = ev["id"]
+        if ev["state"] == "open":
+            self.graph.add_exposure(eid, ev["t_open"], ev["t_close"])
+            self._set_stat("night", f"exposing #{eid} ({ev['exposure']:g} s), "
+                                    f"{self._night_hits} with lightning so far")
+            return
+        self.graph.end_exposure(eid, ev.get("t_end"), ev["lightning"])
+        self._night_hits = ev["with_lightning"]
+        self._set_stat("night", f"{ev['with_lightning']} with lightning / {ev['total']} exposures")
+        name = f"exposure #{eid}" + (f" ({ev['stem']})" if ev.get("stem") else "")
+        if ev["lightning"]:
+            self.preview.show_trigger(f"⚡ LIGHTNING in exposure #{eid}")
+            self._log("trigger", f"{name}: lightning")
+        elif ev["state"] == "done":
+            self._log("info", f"{name}: no flash")
+
     def _ev_night_flash(self, ev) -> None:
-        self.graph.add_flash(time.monotonic())
+        self.graph.add_flash(ev.get("t") or time.monotonic())
 
     def _ev_night_file(self, ev) -> None:
-        self._set_stat("night", f"{ev['kept']} kept / {ev['kept'] + ev['rejected']}")
         if ev["lightning"]:
             self.gallery.add_image(ev["path"], "⚡ " + os.path.basename(ev["path"]), kind="lightning")
 

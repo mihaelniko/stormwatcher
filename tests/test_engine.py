@@ -102,21 +102,95 @@ def test_test_fire_and_state(tmp_path):
         eng.shutdown()
 
 
-def test_night_mode_fires_a_rhythm_and_tags_flash_exposures(tmp_path):
-    eng, ev = engine(tmp_path, every=(0.3, 0.5), mode="night", night_exposure_s=0.2,
-                     night_gap_s=0.1)
+def test_night_mode_demo_runs_timed_exposures(tmp_path):
+    eng, ev = engine(tmp_path, every=(0.3, 0.5), mode="night", night_gap_s=0.1)
     eng.start()
     try:
         time.sleep(1.0)
-        assert eng.arm()
-        time.sleep(3.0)
-        exposures = ev.of("night_exposure")
-        assert 4 <= len(exposures) <= 7          # interval = 0.2 + 0.35 + 0.1
-        assert not ev.of("trigger")               # flashes don't fire in night mode
-        flashes = ev.of("night_flash")
-        assert flashes and any(f["exposures"] for f in flashes)
+        assert eng.arm()                      # demo: 2 s exposures without a camera
+        time.sleep(5.0)
+        done = [e for e in ev.of("night_exposure") if e["state"] == "done"]
+        assert 1 <= len(done) <= 3
+        assert not ev.of("trigger")           # flashes don't release in night mode
+        assert ev.of("night_flash")
     finally:
         eng.shutdown()
+
+
+def test_arming_never_fails_silently(tmp_path):
+    s = Settings(detector="simulated", shutter="usb", mode="night", output_dir=str(tmp_path),
+                 realtime=False)
+    ev = Events()
+    fgp.DEVICE = fgp.Device()
+    fgp.DEVICE.present = False                # camera unplugged
+    eng = Engine(s, ev.append, list_video=lambda: [], list_serial=lambda: [],
+                 sim_factory=lambda: SimulatedSource(seed=1),
+                 camera_factory=lambda emit: CameraWorker(emit, gp=fgp, dest_dir=str(tmp_path)))
+    eng.start()
+    try:
+        assert not eng.arm()
+        reason = ev.of("arm_failed")[-1]["reason"]
+        assert "exposure" in reason and "Night exposure" in reason
+        eng.s.night_exposure_s = 4.0          # exposure known, but USB release needs the camera
+        assert not eng.arm()
+        assert "connected" in ev.of("arm_failed")[-1]["reason"]
+        fgp.DEVICE.present = True
+        fgp.DEVICE.settings["shutterspeed"][0] = "Bulb"
+        eng.s.night_exposure_s = 0.0
+        assert wait_for(lambda: eng.camera.state == "ready")
+        assert wait_for(lambda: "settings" in eng.camera.info)
+        assert not eng.arm()
+        assert "Bulb" in ev.of("arm_failed")[-1]["reason"]
+        assert not eng.armed
+    finally:
+        eng.shutdown()
+
+
+@pytest.mark.parametrize("write,raw", [(0.02, False), (0.7, False), (0.3, True)])
+def test_night_mode_sorts_every_photo_by_its_own_exposure(tmp_path, write, raw):
+    """Ground truth: the simulated D3300 records when its shutter was really
+    open; the simulated storm records when every stroke began."""
+    fgp.DEVICE = fgp.Device()
+    d = fgp.DEVICE
+    d.settings["shutterspeed"][0] = "10/13"   # how libgphoto2 spells 0.77 s on Nikon
+    d.exposure, d.lag, d.write_delay, d.raw_plus_jpeg = 10 / 13, 0.1, write, raw
+    sim = SimulatedSource(every=(1.4, 3.2), seed=3)
+    s = Settings(detector="simulated", shutter="usb", mode="night", output_dir=str(tmp_path),
+                 realtime=False, night_gap_s=0.2, download="all" if raw else "jpeg")
+    ev = Events()
+    eng = Engine(s, ev.append, list_video=lambda: [], list_serial=lambda: [], sim_factory=lambda: sim,
+                 camera_factory=lambda emit: CameraWorker(emit, gp=fgp, dest_dir=eng.session_dir,
+                                                          download=s.download))
+    eng.start()
+    try:
+        assert wait_for(lambda: eng.camera.state == "ready" and "settings" in eng.camera.info)
+        time.sleep(0.8)
+        assert eng.arm()
+        time.sleep(12.0)
+        eng.disarm()
+        assert wait_for(lambda: len({os.path.basename(e["path"]) for e in ev.of("night_file")})
+                        == len(d.windows) * (2 if raw else 1), timeout=8)
+    finally:
+        eng.shutdown()
+
+    sorted_ = {}
+    for e in ev.of("night_file"):
+        stem = "DSC_" + os.path.basename(e["path"]).split("DSC_")[1].split(".")[0]
+        sorted_.setdefault(stem, set()).add(e["lightning"])
+    truth, ambiguous = {}, set()
+    for i, (o, c) in enumerate(d.windows, 1):
+        stem = f"DSC_{i:04d}"
+        truth[stem] = any(o <= f <= c for f in sim.flash_times)
+        if any(o - 0.3 <= f < o or c < f <= c + 0.25 for f in sim.flash_times):
+            ambiguous.add(stem)  # a stroke within the timing slack: keeping it is fine
+    assert sum(truth.values()) >= 1 and len(truth) - sum(truth.values()) >= 1
+    for stem, verdicts in sorted_.items():
+        assert len(verdicts) == 1, f"{stem}: RAW and JPEG sorted apart"
+        got = next(iter(verdicts))
+        if truth[stem]:
+            assert got, f"{stem} held lightning but was not kept"
+        elif stem not in ambiguous:
+            assert not got, f"{stem} had no lightning but was kept"
 
 
 class FakeLink:

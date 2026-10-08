@@ -126,6 +126,7 @@ class Engine:
         self.notes: list = []
         self.armed = False
         self.night: NightController | None = None
+        self._finishing_nights: list = []   # disarmed, still judging their open exposure
         self.clips: ClipRecorder | None = None
         self.rt_desc = "normal priority"
         self.session_dir = ""
@@ -214,6 +215,8 @@ class Engine:
 
     def shutdown(self) -> None:
         self.disarm()
+        for n in self._finishing_nights:
+            n.stop()
         self._teardown(keep_link=False)
         if self.camera:
             self.camera.stop()
@@ -235,6 +238,8 @@ class Engine:
             self.log("warn", "python3-gphoto2 is not installed: no USB camera control")
             return
         cam.on_file = self._on_camera_file
+        cam.on_file_added = self._on_camera_file_added
+        cam.on_trigger_done = self._on_camera_released
         cam.start()
         self.camera = cam
 
@@ -243,10 +248,21 @@ class Engine:
             self.photo_count += 1
         self.emit(ev)
 
+    def _nights(self) -> list:
+        self._finishing_nights = [n for n in self._finishing_nights if n.alive]
+        return ([self.night] if self.night is not None else []) + self._finishing_nights
+
     def _on_camera_file(self, path, stem, t_added) -> None:
-        night = self.night
-        if night is not None:
-            night.on_file(path, stem, t_added)
+        for n in self._nights():
+            n.on_file(path, stem)
+
+    def _on_camera_file_added(self, stem, t) -> None:
+        for n in self._nights():
+            n.on_file_added(stem, t)
+
+    def _on_camera_released(self, info) -> None:
+        for n in self._nights():
+            n.on_release(info["t_released"])
 
     # -------------------------------------------------------- configuring ---
     def _resolve(self) -> tuple[str, str]:
@@ -450,18 +466,55 @@ class Engine:
             self.arm()
 
     # ------------------------------------------------------------- arming ---
+    def night_exposure(self) -> tuple[float | None, str]:
+        """How long each night exposure lasts, or None and the reason why not."""
+        from .camera import _parse_seconds
+
+        if self.s.night_exposure_s > 0:
+            return self.s.night_exposure_s, ""
+        cam = self.camera
+        if cam is not None and cam.connected:
+            d = cam.info.get("settings", {}).get("shutterspeed")
+            if d:
+                sec = _parse_seconds(str(d["value"]))
+                if sec:
+                    return sec, ""
+                return None, (f"The D3300 is set to {d['value']}. Night mode needs a timed shutter "
+                              "speed: set e.g. 4, 8 or 15 seconds on the camera (or enter a night "
+                              "exposure in Setup).")
+            return None, ("Could not read the shutter speed from the D3300. Enter the exposure "
+                          "time under Setup -> Night exposure.")
+        if self.shutter.kind == "none" and self.detector_kind == "simulated":
+            return 2.0, ""  # demo: show the rhythm
+        return None, ("Night mode needs to know how long each exposure is. Connect the D3300 over "
+                      "USB (its shutter speed is read automatically) or enter the exposure time "
+                      "under Setup -> Night exposure.")
+
+    def _arm_failed(self, reason: str) -> bool:
+        self.log("error", "cannot arm: " + reason)
+        self.emit({"type": "arm_failed", "reason": reason})
+        self.emit_state()
+        return False
+
     def arm(self) -> bool:
         if self.armed:
             return True
+        if self.detector_kind == "none":
+            return self._arm_failed(self.errors.get("detector") or "no detector is running")
         if self.s.mode == "night":
-            exp = self.s.night_exposure_s or (self.camera.exposure_seconds() if self.camera else None)
-            try:
-                self.night = NightController(self.shutter, exp or 0, self.s.night_gap_s,
-                                             self.session_dir, self.emit)
-            except ValueError as e:
-                self.log("error", f"{e}: set a timed shutter speed on the camera or "
-                                  "a night exposure in Settings")
-                return False
+            exp, why = self.night_exposure()
+            if exp is None:
+                return self._arm_failed(why)
+            usb = isinstance(self.shutter, UsbShutter)
+            tethered = self.camera is not None and self.camera.connected
+            if usb and not tethered:
+                return self._arm_failed("USB release needs the D3300 connected and switched on.")
+            self.night = NightController(self.shutter.fire, exp, self.s.night_gap_s,
+                                         self.session_dir, self.emit,
+                                         confirm_release=usb, file_events=tethered)
+            if not tethered and self.shutter.kind != "none":
+                self.log("info", "camera not tethered: exposures are timed and logged in "
+                                 "night-log.txt, photos stay on the card")
         self.armed = True
         self.shutter.set_armed(True)
         if isinstance(self.shutter, UsbShutter):
@@ -474,7 +527,8 @@ class Engine:
         rt.hold_cpu_awake(True)
         if self.night:
             self.night.start()
-        self.log("info", "armed" + (" (night mode)" if self.night else ""))
+        self.log("info", "armed" + (f" (night mode, {self.night.exposure:g} s exposures)"
+                                    if self.night else ""))
         self.emit_state()
         return True
 
@@ -483,7 +537,8 @@ class Engine:
             return
         self.armed = False
         if self.night:
-            self.night.stop()
+            self.night.finish()
+            self._finishing_nights.append(self.night)
             self.night = None
         if self.link and self.link.connected and self.detector_kind == "photodiode":
             self.link.set_auto(False)
@@ -509,6 +564,8 @@ class Engine:
     def _on_flash(self, t_frame: float, score: float, source: str) -> None:
         """Called on whichever thread saw the flash. Fires first, asks later."""
         if not self.armed:
+            for n in self._finishing_nights:  # an exposure still open after disarm
+                n.record_flash(t_frame)
             return
         if self.night is not None:
             self.night.record_flash(t_frame)
@@ -554,8 +611,9 @@ class Engine:
         else:
             self._pd_saturated = False
             score = max(0.0, (level - base) / max(1, trip - base))
-        if self.night is not None and score >= 1.0 and self.armed:
-            self.night.record_flash(t)
+        if score >= 1.0:
+            for n in self._nights():
+                n.record_flash(t)
         self._level = float(level)
         self._fps = 100.0
         self._tele_add(t, score)

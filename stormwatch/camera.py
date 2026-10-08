@@ -143,8 +143,9 @@ class CameraWorker(threading.Thread):
         self.capture_target = capture_target  # "card" | "ram"
         self.fast_trigger = fast_trigger
         self.decode_width = decode_width
-        self.on_file = None                  # callback(path, stem, t_added) for night mode
-        self.on_trigger_done = None          # callback(info dict)
+        self.on_file = None                  # callback(path, stem, t_added): downloaded
+        self.on_file_added = None            # callback(stem, t): a new picture is on the card
+        self.on_trigger_done = None          # callback(info dict): release confirmed
 
         self._cam = None
         self._port = ""
@@ -548,7 +549,11 @@ class CameraWorker(threading.Thread):
         self.stats["triggers"] += 1
         self._fast_poll_until = t1 + 8.0
         self._next_poll = 0.0
+        # When the shutter actually went: the direct release is accepted the
+        # moment the camera fires; libgphoto2's path returns only after the
+        # exposure, so its start is the best estimate there.
         info = {"type": "camera_fired", "t_request": t_req, "t_sent": t0, "t_accepted": t1,
+                "t_released": t1 if method == "direct" else t0,
                 "method": method, "coalesced": n - 1}
         self.emit(info)
         if self.on_trigger_done:
@@ -575,6 +580,8 @@ class CameraWorker(threading.Thread):
         t = time.monotonic()
         stem = os.path.splitext(name)[0]
         self.emit({"type": "camera_file", "folder": folder, "name": name})
+        if self.on_file_added:
+            self.on_file_added(stem, t)
         if self._wanted(name):
             self._downloads.append((folder, name, t, stem))
         elif self.on_file:

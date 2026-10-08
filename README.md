@@ -117,9 +117,17 @@ works ("USB-serial remote cable"). It's cheaper, but has no photodiode.
   flashes. **Sensitivity** applies live.
 - **Test release** (`Ctrl+T`) fires the camera once, to check the chain.
 - **Trigger** mode releases on every flash, with a minimum gap between releases.
-  **Night** mode fires a steady rhythm (exposure + 0.35 s + the pause you set)
-  and sorts each frame into `lightning/` or `no-lightning/` by whether a flash
-  happened during *that* exposure. Nothing is deleted.
+- **Night** mode takes one exposure after another and keeps the ones lightning
+  landed in. Set a **timed** shutter speed on the camera (for example 4, 8 or 15
+  seconds, not Bulb); StormWatch reads it over USB. Each exposure starts when
+  the camera confirms the release and ends when its photo appears on the card.
+  Each photo is judged only by whether the detector saw a flash during *its*
+  exposure, then sorted into `lightning/` or `no-lightning/` (nothing is
+  deleted). Every exposure also gets a line in `night-log.txt`. The graph shows
+  each exposure as a band, amber when it caught lightning. Disarming finishes
+  and sorts the exposure that is still open. With only the remote cable (no
+  USB), enter the exposure time under Setup → Night exposure; the photos stay on
+  the card and `night-log.txt` tells you which ones had lightning.
 - The Camera tab shows the D3300's battery, mode dial and focus mode, and sets
   shutter, aperture, ISO, quality and release mode directly on the body.
 - Photos land in `~/Pictures/StormWatch/<date>/` (the date rolls over at noon,
@@ -148,6 +156,7 @@ headless mode.
 | "No StormTrigger firmware answered" | Flash the firmware; check `stormwatch --list-devices`. |
 | Releases ignored with live view + remote cable | The D3300 may ignore the remote in live view. Use USB release with that detector. |
 | "Scheduling: normal priority" | Install rtkit (`sudo dnf install rtkit`) or run `install.sh --realtime` and log in again. |
+| "Cannot arm" in Night mode | The dialog says why: usually the camera is on Bulb (set a timed speed) or not connected (connect it, or enter Setup → Night exposure). |
 | False triggers | Lower Sensitivity; lock the webcam exposure; keep car headlights and blinking lights out of the frame. |
 
 ## How it works

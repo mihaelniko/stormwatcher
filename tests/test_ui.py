@@ -49,3 +49,60 @@ def test_window_runs_demo_arms_and_closes(tmp_path, monkeypatch):
         win.close()
         app.processEvents()
     assert win.client.proc is None
+
+
+def _spin(seconds, until=None):
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        loop = QEventLoop()
+        QTimer.singleShot(20, loop.quit)
+        loop.exec()
+        if until and until():
+            return True
+    return bool(until and until())
+
+
+def test_night_mode_arms_without_apply_and_shows_progress(tmp_path, monkeypatch):
+    """The user's path: pick Night, press ARM straight away (no Apply)."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from stormwatch.settings import Settings
+    from stormwatch.ui.window import MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = MainWindow(Settings(detector="simulated", shutter="none", output_dir=str(tmp_path / "out"),
+                              realtime=False), demo=True)
+    win.show()
+    try:
+        assert _spin(15, lambda: len(win.graph.points) > 30)
+        win.mode_night.setChecked(True)
+        win.arm_btn.click()
+        assert _spin(8, lambda: win._armed)
+        assert _spin(8, lambda: any(e[2] != "open" for e in win.graph.exposures.values()))
+        assert "exposures" in win.stat["night"][0].text()
+    finally:
+        win._armed = False
+        win.close()
+        app.processEvents()
+
+
+def test_unarmable_night_mode_says_why(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from stormwatch.settings import Settings
+    from stormwatch.ui.window import MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    # USB release, night mode, no camera connected, exposure "from camera".
+    win = MainWindow(Settings(detector="simulated", shutter="usb", mode="night",
+                              output_dir=str(tmp_path / "out"), realtime=False), demo=False)
+    win.show()
+    try:
+        assert _spin(15, lambda: len(win.graph.points) > 10)
+        win.arm_btn.click()
+        assert _spin(8, lambda: getattr(win, "_arm_box", None) is not None)
+        assert win._arm_box.isVisible() and "exposure" in win._arm_box.text()
+        assert not win._armed and win.arm_btn.text() == "ARM"
+    finally:
+        win.close()
+        app.processEvents()
