@@ -1,0 +1,4 @@
+# StormWatch (optional, install.sh --realtime): let the desktop user hold
+# /dev/cpu_dma_latency while armed, which keeps CPUs out of deep idle states
+# so the detection thread wakes within microseconds of a webcam frame.
+KERNEL=="cpu_dma_latency", TAG+="uaccess"

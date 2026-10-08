@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stormwatch"
+version = "2.0.0"
+description = "Low-latency lightning trigger for Nikon DSLRs (D3300) on Linux"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["numpy", "pillow", "gphoto2"]
+
+[project.optional-dependencies]
+ui = ["PySide6>=6.4"]
+test = ["pytest"]
+
+[project.scripts]
+stormwatch = "stormwatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["stormwatch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

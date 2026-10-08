@@ -1,0 +1,24 @@
+# StormWatch - device access and latency tweaks.
+# Installed to /etc/udev/rules.d/ by packaging/install.sh.
+
+# Nikon cameras (the D3300 is 04b0:0433): never autosuspend the USB link, so
+# the first release after a quiet spell does not wait for a USB resume, and let
+# the logged-in desktop user open the device.
+ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="04b0", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add|change", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="04b0", TAG+="uaccess"
+
+# StormTrigger boards and USB-serial cables: open them without joining the
+# dialout group, and keep ModemManager away (it probes new serial ports with AT
+# commands and holds them for seconds, exactly while an Arduino is booting).
+# Arduino
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2a03", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# WCH CH340/CH341 (most Nano clones)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Silicon Labs CP210x
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# FTDI
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# FTDI chips hold received bytes for 16 ms by default; make it 1 ms.
+ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTR{latency_timer}="1"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=StormWatch
+GenericName=Lightning Trigger
+Comment=Fire a Nikon DSLR the instant lightning flashes
+Exec=@BIN@
+Icon=stormwatch
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=lightning;storm;camera;nikon;d3300;trigger;
+StartupWMClass=stormwatch
